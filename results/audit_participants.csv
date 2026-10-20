@@ -1,0 +1,2 @@
+n_rows_participants_tsv,n_unique_ids_participants_tsv,duplicated_ids,n_subject_folders,in_tsv_without_folder,folder_without_tsv
+55,54,sub-mit081,40,sub-mit075;sub-mitr009;sub-mitr008;sub-mit042;sub-mit056;sub-mit087;sub-mit118;sub-mit085;sub-mit091;sub-mit093;sub-mit086;sub-mit100;sub-mit002;sub-mit064,

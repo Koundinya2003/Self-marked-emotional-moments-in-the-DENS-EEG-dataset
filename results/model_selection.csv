@@ -1,0 +1,13 @@
+hypothesis,structure,formula,converged,singular,messages
+H1,full,ln_alpha_posterior ~ cond + (1 + cond | subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H1,nocorr,ln_alpha_posterior ~ cond + (1 + cond || subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H1,intercept,ln_alpha_posterior ~ cond + (1 | subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H2,full,faa ~ valence_z + (1 + valence_z | subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H2,nocorr,faa ~ valence_z + (1 + valence_z || subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H2,intercept,faa ~ valence_z + (1 | subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H2,minimal,faa ~ valence_z + (1 | subject) + (1 | stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H3a,full,ln_theta_frontal ~ arousal_z + (1 + arousal_z | subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H3a,nocorr,ln_theta_frontal ~ arousal_z + (1 + arousal_z || subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H3a,intercept,ln_theta_frontal ~ arousal_z + (1 | subject) + (1 | stim) + (1 | subject:stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H3a,minimal,ln_theta_frontal ~ arousal_z + (1 | subject) + (1 | stim),TRUE,TRUE,boundary (singular) fit: see help('isSingular')
+H3b,full,ln_beta_global ~ arousal_z + (1 + arousal_z | subject) + (1 | stim) + (1 | subject:stim),TRUE,FALSE,

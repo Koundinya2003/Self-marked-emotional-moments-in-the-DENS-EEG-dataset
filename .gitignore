@@ -1,0 +1,23 @@
+# raw and intermediate data are never committed
+data/
+*.fdt
+*.set
+*.edf
+*.bdf
+# R / renv
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+renv/local/
+renv/cellar/
+renv/lock/
+renv/python/
+renv/sandbox/
+renv/staging/
+# quarto
+paper/*_files/
+paper/.quarto/
+/.quarto/
+*.log
+*.aux

@@ -1,0 +1,557 @@
+---
+title: "Do Self Marked Emotional Moments Carry an EEG Signature? A Preregistered Reanalysis of the DENS Naturalistic Emotion Dataset"
+author:
+  - name: "Aditya Koundinya"
+    email: "aditya003koundinya@gmail.com"
+format:
+  pdf:
+    documentclass: IEEEtran
+    classoption: [journal]
+    pdf-engine: xelatex
+    mainfont: "TeX Gyre Termes"
+    fontsize: 10pt
+    number-sections: true
+    colorlinks: false
+    fig-pos: "t"
+    keep-tex: false
+    indent: true
+    include-in-header:
+      text: |
+        \usepackage{booktabs}
+        \usepackage{float}
+        \usepackage{array}
+        \usepackage{caption}
+        \captionsetup[figure]{labelsep=period, font=footnotesize, justification=justified, singlelinecheck=false}
+        \captionsetup[table]{labelsep=newline, font=footnotesize, textfont=sc, justification=centering}
+  html:
+    toc: true
+    number-sections: true
+    embed-resources: true
+crossref:
+  fig-prefix: "Fig."
+  fig-title: "Fig."
+  tbl-title: "TABLE"
+  fig-labels: arabic
+bibliography: references.bib
+csl: ieee.csl
+link-citations: true
+execute:
+  echo: false
+  warning: false
+  message: false
+knitr:
+  opts_knit:
+    root.dir: ".."
+---
+
+```{r setup}
+#| include: false
+suppressPackageStartupMessages({ library(dplyr); library(readr); library(tidyr); library(knitr) })
+# numbers are typeset with a true minus sign (U+2212)
+f2 <- function(x, d = 2) gsub("-", "\u2212", formatC(x, format = "f", digits = d), fixed = TRUE)
+f3 <- function(x) f2(x, 3)
+fp <- function(p) ifelse(p < 0.001, "< .001", paste0("= ", sub("^0", "", formatC(p, format = "f", digits = 3))))
+ci <- function(lo, hi, d = 3) paste0("[", f2(lo, d), ", ", f2(hi, d), "]")
+
+audit <- read_csv("results/audit_subjects.csv", show_col_types = FALSE)
+trials <- read_csv("results/audit_trials.csv", show_col_types = FALSE)
+parts <- read_csv("results/audit_participants.csv", show_col_types = FALSE)
+qc <- read_csv("results/qc_summary.csv", show_col_types = FALSE)
+ep <- read_csv("results/features_epoch.csv", show_col_types = FALSE)
+conf <- read_csv("results/confirmatory.csv", show_col_types = FALSE)
+rob <- read_csv("results/robustness.csv", show_col_types = FALSE)
+expl <- read_csv("results/exploratory.csv", show_col_types = FALSE)
+msel <- read_csv("results/model_selection.csv", show_col_types = FALSE)
+assum <- read_csv("results/assumption_checks.csv", show_col_types = FALSE)
+outl <- read_csv("results/robustness_outliers.csv", show_col_types = FALSE)
+hrg <- read_csv("results/click_hr_group.csv", show_col_types = FALSE)
+src <- read_csv("results/self_review_checks.csv", show_col_types = FALSE)
+source("code/functions/models.R")
+source("code/functions/montage.R")
+
+n_folders <- nrow(audit)
+n_complete <- sum(audit$fdt_bytes == audit$fdt_bytes_expected)
+n_trunc <- n_folders - n_complete
+n_videos_all <- nrow(trials)
+n_videos_rec <- sum(trials$in_recorded_data)
+n_clicks_all <- sum(trials$n_clicks)
+n_clicks_rec <- sum(trials$n_clicks[trials$in_recorded_data])
+n_beh <- sum(audit$has_beh)
+size_gb <- sum(read_csv("results/file_inventory.csv", show_col_types = FALSE)$size) / 1e9
+
+qok <- qc |> filter(status == "ok", !excluded_too_many_bad)
+n_proc <- nrow(qok)
+n_err <- sum(qc$status == "error")
+n_norec <- sum(grepl("no recorded", qc$status))
+n_toomanybad <- sum(qc$excluded_too_many_bad)
+
+h1d <- h1_set(ep, ep$rejected)
+rsd <- rating_set(ep, ep$rejected)
+C <- function(h) conf |> filter(hypothesis == h)
+ids <- function(x) gsub(";", ", ", gsub("sub-", "", x))
+R <- function(h, a) rob |> filter(hypothesis == h, analysis == a)
+n_marked_all <- sum(ep$condition == "marked"); n_control_all <- sum(ep$condition == "control")
+rej_m <- mean(ep$rejected[ep$condition == "marked"]); rej_c <- mean(ep$rejected[ep$condition == "control"])
+filt <- readRDS(file.path("results/subjects", "sub-mit003.rds"))
+fr <- signal::freqz(signal::fir1(filt$filter_main$order, filt$filter_main$cutoff_hz / 125, "pass",
+                                 window = signal::hamming(filt$filter_main$order + 1)), n = 8192, Fs = 250)
+att50 <- -20 * log10(Mod(fr$h[which.min(abs(fr$f - 50))]))
+n_scalp <- 129 - length(OUTER_RING)
+ph <- read_csv("results/posthoc_motor.csv", show_col_types = FALSE)
+P <- function(w, m) ph |> filter(window == w, measure == m)
+E <- function(fam, ...) { d <- expl |> filter(family == fam); f <- list(...); for (k in names(f)) d <- d[d[[k]] %in% f[[k]], ]; d }
+est <- function(r, d = 3) paste0("b = ", f2(r$estimate, d), ", 95% CI ", ci(r$ci_low, r$ci_high, d))
+full <- function(r) paste0(est(r), ", t(", f2(r$df, 1), ") = ", f2(r$estimate / r$se, 2), ", p ", fp(r$p))
+n_rep_kept <- mean(ep$n_repaired[!ep$rejected] > 0)
+kept_m <- sum(!ep$rejected & ep$condition == "marked"); kept_c <- sum(!ep$rejected & ep$condition == "control")
+kept_mp <- sum(!ep$rejected_prereg & ep$condition == "marked"); kept_cp <- sum(!ep$rejected_prereg & ep$condition == "control")
+n_feat_subj <- n_distinct(ep$subject)
+hr_e <- E("E3 heart rate", measure = "hr_bpm"); hr_t <- E("E3 heart rate", measure = "hr change 0..5 s after click vs -10..-6 s")
+e1 <- E("E1 condition effect"); e2a <- E("E2a rating association (marked epochs)"); e2b <- E("E2b marked-minus-control difference ~ rating")
+e4 <- E("E4 click intensity"); e5 <- E("E5 neutral vs emotional videos (control epochs)")
+hr_pre <- hrg |> filter(t < 0); hr_post <- hrg |> filter(t > 0)
+hr_min <- hr_pre[which.min(hr_pre$mean), ]; hr_max <- hr_post[which.max(hr_post$mean), ]
+# IEEE style tables: caption above, booktabs, table* (two column span) when wide
+ieee_table <- function(df, caption, wide = FALSE, align = NULL, colspec = NULL) {
+  if (knitr::is_latex_output()) {
+    tab <- if (is.null(colspec)) {
+      knitr::kable(df, format = "latex", booktabs = TRUE, linesep = "", align = align, escape = TRUE)
+    } else {
+      esc <- function(x) gsub("([&%#_$])", "\\\\\\1", x)
+      body <- apply(df, 1, function(r) paste(esc(r), collapse = " & "))
+      paste0("\\begin{tabular}{", colspec, "}\n\\toprule\n", paste(esc(names(df)), collapse = " & "), " \\\\\n\\midrule\n",
+             paste(body, collapse = " \\\\\n"), " \\\\\n\\bottomrule\n\\end{tabular}")
+    }
+    env <- if (wide) "table*" else "table"
+    knitr::asis_output(paste0("\\begin{", env, "}[t]\n\\centering\n\\caption{", caption, "}\n\\footnotesize\n",
+                              tab, "\n\\end{", env, "}\n"))
+  } else knitr::kable(df, caption = caption, align = align)
+}
+```
+
+::: {.content-visible when-format="html"}
+## Abstract {.unnumbered}
+:::
+
+```{=latex}
+\begin{abstract}
+```
+
+Naturalistic film paradigms rarely reveal when an emotion is actually felt. The DENS dataset addresses this by
+recording self marked emotional moments (mouse clicks) during film viewing with 128 channel EEG. In this
+preregistered secondary analysis, implemented entirely in R, I compared 4 s epochs preceding clicks with unmarked
+epochs of the same clips (H1, posterior alpha) and related frontal alpha asymmetry to valence (H2) and frontal theta
+and global beta to arousal (H3a, H3b), using linear mixed models with false discovery rate correction. I found that
+`r n_trunc` of `r n_folders` EEG files in the public release are truncated, so only `r n_videos_rec` of
+`r n_videos_all` clip presentations could be analysed. After preprocessing, `r C("H1")$n_obs` epochs from
+`r C("H1")$n_subjects` participants entered H1. Posterior alpha was lower before clicks than in control epochs
+(`r est(C("H1"))`, d = `r f2(C("H1")$std_effect)`, uncorrected p `r fp(C("H1")$p)`), but the effect did not survive
+correction (adjusted p `r fp(C("H1")$p_fdr)`), disappeared in an earlier window and was accompanied by a left
+lateralised sensorimotor alpha and beta decrease, which is consistent with preparation of the right hand click.
+Frontal asymmetry was unrelated to valence, and theta and beta were unrelated to arousal (adjusted p
+`r fp(C("H2")$p_fdr)`, `r fp(C("H3a")$p_fdr)` and `r fp(C("H3b")$p_fdr)`). These results provide no confirmatory
+evidence that self marked emotional moments carry a distinct spectral signature, and they show that click based
+emotion markers require control periods matched for motor output.
+
+```{=latex}
+\end{abstract}
+\begin{IEEEkeywords}
+Electroencephalography, emotion, naturalistic stimuli, alpha oscillations, frontal alpha asymmetry, mixed models,
+preregistration, open data.
+\end{IEEEkeywords}
+```
+
+::: {.content-visible when-format="html"}
+**Index Terms:** Electroencephalography, emotion, naturalistic stimuli, alpha oscillations, frontal alpha asymmetry,
+mixed models, preregistration, open data.
+:::
+
+# Introduction
+
+Laboratory studies of emotion and the electroencephalogram (EEG) have mostly relied on brief, repeated, context free
+stimuli such as affective pictures. Naturalistic stimuli such as film clips provide context and unfold over time, and
+they are increasingly recommended for studying emotion as it is experienced [@sonkusare2019; @saarimaki2021]. Their
+cost is temporal uncertainty. Across a minute of film, a viewer feels an emotion only at certain moments, and
+averaging over the whole clip mixes those moments with periods of neutral viewing or mind wandering. Widely used
+affective EEG datasets such as DEAP provide a single rating per clip and no information about when the emotion was
+felt [@koelstra2012].
+
+The Dataset on Emotion with Naturalistic Stimuli (DENS) addresses this limitation directly [@mishra2021dens;
+@dens2023openneuro]. While 128 channel EEG was recorded, participants watched one minute film clips, clicked a mouse
+whenever they felt a discernible emotion, rated each clip on valence, arousal and further scales, and labelled each
+click with an emotion category. The dataset authors have used these "emotional events" to decode valence and arousal
+[@asif2023] and to describe theta and beta dynamics [@mishra2021theta]. To my knowledge, no preregistered,
+hypothesis driven test of classic spectral markers around these self marked moments has been reported.
+
+Three lines of prior work motivate specific predictions. First, alpha power (8 to 13 Hz) decreases when attention is
+engaged and sensory regions are in an active processing state [@klimesch2012; @jensen2010]. Emotionally arousing
+pictures produce stronger posterior alpha desynchronization than neutral pictures [@decesarei2011; @schubring2019],
+and shared EEG responses to film have been linked to emotionally laden attention [@dmochowski2012]. A felt emotional
+moment should therefore show lower posterior alpha than other periods of the same film (H1). Second, frontal alpha
+asymmetry (FAA) has been related to approach and withdrawal motivation and, less consistently, to valence: relatively
+greater left frontal activity, that is, less left alpha, accompanies approach related and positive states
+[@davidson1992; @harmonjones2010; @reznik2018]. FAA during marked moments should therefore increase with the clip's
+rated valence (H2). Third, theta and beta activity have been associated with emotional processing and arousal
+[@aftanas2001; @ray1985; @knyazev2007], so frontal theta (H3a) and global beta (H3b) during marked moments should
+increase with rated arousal.
+
+The contributions of this paper are as follows.
+
+1. I report an audit of the public DENS release (OpenNeuro ds003751, version 1.0.6) showing that most EEG binaries
+   are truncated, and I document how the remaining data can be used.
+2. I provide a preregistered test of four hypotheses linking self marked emotional moments to EEG spectral activity
+   and to self reported valence and arousal.
+3. I show that the only effect approaching significance is better explained by motor preparation than by emotion, which
+   identifies a design constraint for click based emotion markers.
+4. I release a complete, reproducible R pipeline, from raw EEGLAB files to the rendered paper.
+
+# Materials and Methods
+
+## Dataset and Data Audit
+
+I used OpenNeuro ds003751 version 1.0.6 [@dens2023openneuro], downloaded from the public OpenNeuro S3 bucket
+(`r f2(size_gb)` GB). I identified the version through the DataLad mirror of the dataset, whose git annex checksums
+matched every EEG file I downloaded. The dataset contains EEG for `r n_folders` participants (the dataset paper
+reports 43 recorded participants, 3 of whom were excluded for movement [@mishra2021dens]). The participants file
+lists `r parts$n_unique_ids_participants_tsv` unique identifiers, `r length(strsplit(parts$in_tsv_without_folder, ";")[[1]])`
+of them without data, which explains the conflicting participant counts found in secondary sources. Ratings files
+exist for `r n_beh` participants. EEG was recorded with a 128 channel EGI HydroCel net referenced to the vertex (Cz,
+E129) at 250 Hz, together with one ECG lead. Participants watched `r min(audit$n_stm)` to `r max(audit$n_stm)` clips
+of about 60 s (emotional clips plus two neutral clips) and were instructed to click "only when they felt any
+discernible emotion" [@mishra2021dens]. After each clip they rated valence, arousal and dominance (1 to 9), liking,
+familiarity and relevance, and they assigned an emotion category and an intensity to each click. Thirty of 34
+participants reported clicking 2 to 3 s after becoming aware of the emotion [@mishra2021dens]. I verified that event
+onsets in the BIDS events files are stored in samples rather than seconds by comparing them with the click times in
+the ratings files.
+
+During the audit I found that for `r n_trunc` of `r n_folders` participants the binary file holding the samples is
+shorter than its header implies. The checksums show that this is the published state of version 1.0.6 rather than a
+download error. Because EEGLAB stores samples interleaved across channels, a truncated file contains complete data for
+an initial part of the session. I therefore used every clip whose full window lay inside the recorded samples:
+`r n_videos_rec` of `r n_videos_all` clip presentations and `r n_clicks_rec` of `r n_clicks_all` clicks. Only
+`r n_complete` participants have complete recordings.
+
+## Preregistration
+
+Before computing any outcome measure, I committed the hypotheses, epoch definitions, preprocessing parameters,
+exclusion rules, statistical models, correction method and the split between confirmatory and exploratory analyses to
+the project repository, under the commit message "Preregistration, locked before analysis". Up to that point I had
+examined only metadata, file headers and a quality control pilot of the preprocessing in two participants, without
+epochs, conditions or ratings. Every later change is listed as a deviation in Appendix A.
+
+## Epoch Definition
+
+Times are given relative to clip onset, and the usable span of a clip runs from 2 s after onset to 0.5 s before its
+end. A marked epoch spans 4.5 s to 0.5 s before a click. This centres the 4 s window on the reported felt moment and
+ends it before the hand movement. A click was used only if no other click occurred in the preceding 5 s. Control
+epochs are consecutive, nonoverlapping 4 s windows of the same clip outside the zone from 7 s before to 3 s after
+every click. For the condition contrast, only clips with at least one retained marked epoch and one retained control
+epoch contribute. A second marked window, from 6.5 s to 2.5 s before the click, served as a preregistered robustness
+check against motor preparation [@pfurtscheller1999].
+
+## Preprocessing
+
+I implemented all steps in R 4.4.3. Files were read with the R.matlab package. After cropping to the analysed part of
+the session and removing channel means, I applied a zero phase windowed sinc FIR filter (Hamming window, order
+`r filt$filter_main$order`, passband 1 to 40 Hz, half amplitude points at `r f2(filt$filter_main$cutoff_hz[1], 1)` and
+`r f2(filt$filter_main$cutoff_hz[2], 0)` Hz) separately to each segment between recording discontinuities. Line noise
+at 50 Hz was strong in the raw data but is attenuated by `r f2(att50, 0)` dB by the lowpass edge, so I did not use a
+notch filter. Bad channels were those that were flat, had a robust z score of log standard deviation above 3, or had a
+median correlation below 0.4 with their six nearest neighbours. They were excluded from referencing and from
+independent component analysis (ICA) and later interpolated with regularised spherical splines [@perrin1989]. The
+data were then rereferenced to the average of the good channels, which recovers the vertex reference channel.
+
+ICA used FastICA [@hyvarinen2000] with 70 components after principal component reduction, trained on clean 1 s
+windows. Because ICLabel [@piontonachini2019] is not available in R, I classified components with fixed rules applied
+identically to every participant. A component was labelled ocular if its absolute correlation with a vertical or
+horizontal EOG derivation built from periocular channels was at least 0.7, or if that correlation had a z score of at
+least 3 across components and an absolute value of at least 0.3. It was labelled muscular if its 20 to 40 Hz power
+was at least as large as its 2 to 20 Hz power [@muthukumaraswamy2013] and its topography was focal (at least 40 % of
+the squared weights on one channel) or peripheral (at least 50 % on face and neck channels). It was labelled cardiac
+if its correlation with the ECG was at least 0.5. A flagged component was removed only if removing it did not
+increase the typical amplitude of clean data. A simulation confirmed that the implementation recovers and removes a
+known source.
+
+The preregistered amplitude rule rejected an epoch if any of the `r n_scalp` scalp channels outside the face and neck
+ring exceeded 100 µV. Because sporadic single channel transients caused this rule to discard nearly all data, I used
+epoch level channel repair instead. In each epoch, up to 9 scalp channels exceeding 100 µV were replaced by spherical
+spline interpolation, and the epoch was kept if no scalp channel then exceeded 100 µV. Epochs with more flagged
+channels were rejected. I report the preregistered rule as a robustness analysis.
+
+## Spectral Features
+
+I estimated power spectra per epoch with Welch's method [@welch1967] (2 s Hann windows, 50 % overlap, 0.5 Hz
+resolution). Band power in the theta (4 to 8 Hz), alpha (8 to 13 Hz) and beta (13 to 30 Hz) bands was averaged over
+the channels of predefined regions, each consisting of anchor sites equivalent to the 10/20 system plus all scalp
+channels within 3 cm, and then log transformed. Posterior alpha used `r length(PREREG_REGIONS$posterior)` parieto
+occipital channels, frontal theta used `r length(PREREG_REGIONS$frontal)` frontal channels and global beta used all
+`r n_scalp` scalp channels. FAA was computed as ln(alpha, right F4 cluster) minus ln(alpha, left F3 cluster), with
+`r length(PREREG_REGIONS$faa_left)` mirror symmetric channels per cluster [@smith2017]. For the exploratory analysis,
+heart rate was derived from ECG R peaks.
+
+## Statistical Analysis
+
+I fitted linear mixed models with lme4 and lmerTest, using restricted maximum likelihood and Satterthwaite degrees of
+freedom [@bates2015; @kuznetsova2017]. The H1 model predicted epoch level ln posterior alpha from condition (control
+0, marked 1), with a random slope for condition per participant and random intercepts for participant, stimulus and
+clip presentation. The H2, H3a and H3b models predicted FAA, ln frontal theta and ln global beta in marked epochs from
+the standardised clip rating (valence for H2, arousal for H3), with a random slope per participant and the same
+intercepts. Random effects followed a preregistered simplification rule when a model did not converge or was singular
+[@barr2013]. Effect sizes are d for H1, scaled by the summed random intercept and residual variances [@westfall2014],
+and standardised slopes for H2 and H3. The four confirmatory p values were corrected with the Benjamini and Hochberg
+procedure [@benjamini1995] at q = .05. The robustness analyses (alternative 0.5 Hz highpass, 75 µV threshold,
+exclusion of outlier participants, the early marked window, complete recordings only, intercept only random effects
+and the preregistered rejection rule) are descriptive. Exploratory analyses are corrected within their own families.
+
+# Results
+
+## Data Retained
+
+Of `r n_folders` participants, `r n_norec` had no complete clip in the recorded data and `r n_toomanybad` exceeded the
+preregistered limit of 25 bad channels. No participant failed in processing, which left `r n_feat_subj` participants
+with features (@fig-qc). The median number of interpolated channels was `r median(qok$n_bad_channels)`, ICA removed a
+median of `r median(qok$n_ic_removed)` of 70 components, and cleaning left alpha power at a median of
+`r f2(median(qok$clean_ratio_alpha))` times its value before cleaning. Of `r n_marked_all` marked and
+`r n_control_all` control epochs, I retained `r kept_m` and `r kept_c` (the preregistered rule without channel repair
+would have retained `r kept_mp` and `r kept_cp`), and `r f2(100 * n_rep_kept, 0)` % of retained epochs had at least
+one repaired channel. The H1 model contained `r C("H1")$n_obs` epochs from `r C("H1")$n_videos` clip presentations of
+`r C("H1")$n_subjects` participants, and the H2 and H3 models contained `r C("H2")$n_obs` marked epochs from
+`r C("H2")$n_subjects` participants with ratings. Rated valence and arousal spanned the full scales (@fig-ratings).
+
+```{r fig-qc}
+#| fig-cap: "Data availability and quality control per participant. (a) Recording length in the file header (grey) and samples present in the version 1.0.6 files (blue). (b) Interpolated channels. (c) Removed ICA components. (d) Epochs rejected after channel repair."
+#| fig-env: "figure*"
+#| fig-pos: "t"
+#| out-width: "100%"
+knitr::include_graphics("../figures/fig_qc_overview.png", error = FALSE)
+```
+
+```{r fig-ratings}
+#| fig-cap: "Valence and arousal ratings of all rated clips and of the clips that entered H2 and H3."
+#| fig-env: "figure*"
+#| fig-pos: "t"
+#| out-width: "70%"
+knitr::include_graphics("../figures/fig_ratings.png", error = FALSE)
+```
+
+## Confirmatory Tests
+
+```{r tab-conf}
+ieee_table(conf |> transmute(H = hypothesis, b = f3(estimate), `95% CI` = ci(ci_low, ci_high),
+                             df = f2(df, 1), p = f3(p), `p (FDR)` = f3(p_fdr), Std = f2(std_effect),
+                             N = paste0(n_obs, "/", n_subjects), `Random effects` = structure),
+           caption = "Confirmatory Mixed Models. H1: posterior alpha, marked versus control; H2: FAA and valence; H3a: frontal theta and arousal; H3b: global beta and arousal. Std: d for H1, standardised slope for H2 and H3. N: epochs/participants.",
+           wide = TRUE, align = "lrrrrrrrl")
+```
+
+Table I summarises the confirmatory models. Posterior alpha power was lower in marked than in control epochs,
+`r full(C("H1"))`, d = `r f2(C("H1")$std_effect)` (@fig-bandpower). After Benjamini and Hochberg correction across the
+four confirmatory tests, the effect was not significant (adjusted p `r fp(C("H1")$p_fdr)`), so H1 is not supported at
+the preregistered criterion. FAA in marked epochs was not related to valence, `r full(C("H2"))`, with a standardised
+slope of `r f2(C("H2")$std_effect)`. Frontal theta was not related to arousal, `r full(C("H3a"))`, and neither was
+global beta, `r full(C("H3b"))` (@fig-ratingassoc). None of the four hypotheses was therefore supported. The
+confidence intervals for H2 and H3 exclude standardised slopes larger than about
+`r f2(max(abs(c(conf$std_ci_low, conf$std_ci_high)), na.rm = TRUE), 1)` SD per SD of rating.
+
+```{r fig-bandpower}
+#| fig-cap: "Band power by condition in the H1 analysis set. (a) Participant mean ln posterior alpha. (b) Posterior spectra. (c) Marked minus control spectra by region. (d) Marked minus control band power per participant."
+#| fig-env: "figure*"
+#| fig-pos: "t"
+#| out-width: "85%"
+knitr::include_graphics("../figures/fig_bandpower_condition.png", error = FALSE)
+```
+
+```{r fig-topo}
+#| fig-cap: "Topographies of the marked minus control difference in ln band power, averaged over participants (exploratory, uncorrected). Nose up; left hemisphere on the left."
+#| fig-env: "figure*"
+#| fig-pos: "t"
+#| out-width: "80%"
+knitr::include_graphics("../figures/fig_topomaps.png", error = FALSE)
+```
+
+```{r fig-ratingassoc}
+#| fig-cap: "Marked epoch measures against clip ratings for H2, H3a and H3b, shown as clip means centred within participant. Statistics are from the mixed models."
+#| fig-env: "figure*"
+#| fig-pos: "t"
+#| out-width: "100%"
+knitr::include_graphics("../figures/fig_rating_associations.png", error = FALSE)
+```
+
+## Robustness
+
+The H1 estimate was similar with the 0.5 Hz highpass filter (`r est(R("H1", "R1_alt_filter"))`), with a 75 µV
+threshold (`r est(R("H1", "R2_strict_75uV"))`) and with intercept only random effects. It shrank after excluding
+outlier participants (`r est(R("H1", "R3_no_outliers"))`; excluded: `r ids(outl$outlier_subjects[outl$hypothesis == "H1"])`),
+in the complete recordings only (`r est(R("H1", "R5_complete_files"))`, `r R("H1", "R5_complete_files")$n_subjects`
+participants) and under the preregistered rejection rule (`r est(R("H1", "R7_prereg_rejection"))`). It was absent in
+the earlier marked window, 6.5 to 2.5 s before the click (`r est(R("H1", "R4_early_window"))`). No robustness analysis
+produced an effect for H2, H3a or H3b (all p > `r f2(floor(100 * min(rob$p[rob$hypothesis != "H1"], na.rm = TRUE)) / 100)`;
+@fig-effects).
+
+```{r fig-effects}
+#| fig-cap: "Confirmatory estimates (orange) and preregistered robustness analyses with 95 % confidence intervals. R7 applies the preregistered epoch rejection rule without channel repair."
+#| fig-env: "figure*"
+#| fig-pos: "t"
+#| out-width: "100%"
+knitr::include_graphics("../figures/fig_effects.png", error = FALSE)
+```
+
+Model diagnostics showed approximately normal random effects, whereas the H1 residuals were right skewed and heavy
+tailed (skewness `r f2(assum$resid_skew[assum$hypothesis == "H1"])`, excess kurtosis
+`r f2(assum$resid_excess_kurtosis[assum$hypothesis == "H1"])`). Fixed effect estimates of linear mixed models are
+fairly robust to such departures, and the H1 conclusion was unchanged under outlier exclusion. Because the selected
+random structures dropped the random slope (H1) and the clip presentation intercept (H2, H3a), I also ran two
+conservative checks: a paired t test on participant means for H1 (`r est(src[1, ])`, t(`r src$df[1]`),
+p `r fp(src$p[1])`, `r src$n[1]` participants), and models of clip level means of marked epochs for H2, H3a and H3b
+(p `r fp(src$p[2])`, `r fp(src$p[3])` and `r fp(src$p[4])`). Both agree with the confirmatory results.
+
+## Exploratory Analyses
+
+Among the condition effects per band and region, alpha was lower in marked epochs over the left lateral region
+(`r est(e1 |> filter(band == "alpha", region == "left"))`, FDR adjusted p
+`r fp((e1 |> filter(band == "alpha", region == "left"))$p_fdr)`). This was the only one of 15 band and region contrasts
+that survived correction within its family; theta and beta showed no condition effects (all adjusted p
+`r fp(min(e1$p_fdr[e1$band != "alpha"]))` or larger). The alpha decrease was centred over left centroparietal sites
+(@fig-topo).
+
+None of the 30 band and region associations with valence or arousal in marked epochs (smallest adjusted p
+`r fp(min(e2a$p_fdr))`) and none of the 8 associations between the clip level marked minus control difference and the
+ratings (smallest adjusted p `r fp(min(e2b$p_fdr))`) was significant.
+
+Heart rate in marked epochs did not differ reliably from control epochs (`r est(hr_e, 2)` bpm, p `r fp(hr_e$p)`).
+Around clicks, heart rate decreased before the click (lowest `r f2(hr_min$mean)` bpm relative to baseline at
+`r f2(hr_min$t, 0)` s) and rose briefly afterwards (highest `r f2(hr_max$mean)` bpm at `r hr_max$t` s; @fig-hr), with
+wide confidence intervals. The mean change from 0 to 5 s after the click relative to baseline was `r f2(hr_t$estimate)`
+bpm (95 % CI `r ci(hr_t$ci_low, hr_t$ci_high, 2)`, `r hr_t$n_subjects` participants).
+
+Click intensity was not related to posterior alpha in marked epochs (`r est(e4)`, p `r fp(e4$p)`). Control epochs of
+neutral clips had higher posterior alpha than control epochs of emotional clips (`r est(e5)`, p `r fp(e5$p)`;
+uncorrected single test).
+
+```{r fig-hr}
+#| fig-cap: "Heart rate change around clicks (exploratory); mean and 95 % confidence interval over participants."
+#| out-width: "3.4in"
+knitr::include_graphics("../figures/fig_heart_rate.png", error = FALSE)
+```
+
+## Post Hoc Analysis of Motor Preparation
+
+Because the H1 effect disappeared in the earlier window and peaked over the left hemisphere, I tested whether it
+reflects preparation of the right hand mouse click, which desynchronises mu (alpha band) and beta activity over the
+contralateral sensorimotor cortex [@pfurtscheller1999]. This analysis was not preregistered. In the preregistered
+marked window, alpha decreased over the left sensorimotor cluster around C3 (`r est(P("marked", "ln_alpha_c3"))`,
+p `r fp(P("marked", "ln_alpha_c3")$p)`) but not over the right cluster around C4 (`r est(P("marked", "ln_alpha_c4"))`).
+Right minus left lateralisation therefore increased for alpha (`r est(P("marked", "lat_alpha"))`,
+p `r fp(P("marked", "lat_alpha")$p)`) and beta (`r est(P("marked", "lat_beta"))`, p `r fp(P("marked", "lat_beta")$p)`).
+In the early window these effects were smaller and not significant (alpha lateralisation
+`r est(P("marked_early", "lat_alpha"))`, beta `r est(P("marked_early", "lat_beta"))`). I chose these tests after
+seeing the confirmatory results, and they are uncorrected.
+
+# Discussion
+
+In this preregistered reanalysis I asked whether self marked emotional moments during film viewing carry a distinct
+EEG spectral signature, and whether activity during these moments tracks rated valence and arousal. At the
+preregistered criterion, the answer is no for all four hypotheses.
+
+The one effect that came close, lower posterior alpha before clicks, points in the direction predicted by accounts of
+alpha as a marker of attentional engagement [@klimesch2012; @jensen2010] and by affective picture studies
+[@decesarei2011; @schubring2019]. Three observations, however, argue against reading it as an emotional engagement
+effect. First, it did not survive correction for multiple testing. Second, it was absent 6.5 to 2.5 s before the
+click, even though participants reported clicking 2 to 3 s after becoming aware of their emotion [@mishra2021dens], so
+the early window should still contain much of the felt moment. Third, the decrease was strongest over left
+centroparietal sites and was accompanied by a left lateralised alpha and beta decrease around C3, which is the
+signature of preparing a right hand movement [@pfurtscheller1999]. Every marked epoch precedes a voluntary click,
+whereas no control epoch does, so the comparison confounds felt emotion with motor intention. The 0.5 s gap before
+the click, chosen to exclude movement execution, is shorter than the 1.5 to 2 s over which premovement
+desynchronisation builds up [@pfurtscheller1999]. This is a design level limitation of click based emotion markers,
+and it also applies to decoding studies that use the same events [@asif2023], because classifiers trained on
+windows preceding clicks may partly learn motor preparation.
+
+The absence of a relation between frontal asymmetry and valence agrees with reviews that find state FAA effects
+inconsistent and more closely tied to approach motivation than to valence as such [@harmonjones2010; @reznik2018].
+With one rating per clip, valence varied mainly between clips and participants, and only `r C("H2")$n_obs` marked
+epochs had ratings, so the test was weak; its confidence interval nevertheless excludes moderate standardised slopes.
+The same applies to theta, beta and arousal. Theta and beta effects in the affective literature come mostly from
+event related designs with many repetitions [@aftanas2001; @ray1985; @knyazev2007], whereas here a few seconds of
+spontaneous EEG per marked moment were related to a rating given once per clip. The exploratory finding of higher
+posterior alpha during neutral than during emotional clips suggests that emotional films do engage viewers in a way
+that alpha can reflect at the level of whole clips, even though this was not detectable for individual marked
+moments.
+
+# Limitations
+
+*Secondary data and truncation.* I analysed data collected by others. Because `r n_trunc` of `r n_folders` EEG files
+are truncated, only `r n_videos_rec` of `r n_videos_all` clip presentations were usable, and later clips in each
+session are underrepresented. Truncation depends only on position in the session, but it reduced power and may have
+changed the mix of stimuli.
+
+*Sample size.* The H1 model included `r C("H1")$n_subjects` participants and `r kept_m` marked epochs, and the H2 and
+H3 models included `r C("H2")$n_obs` marked epochs from `r C("H2")$n_subjects` participants. Several mixed models were
+singular and had to be simplified, and estimates of small effects are imprecise.
+
+*Self report.* Clicks depend on participants' willingness and criterion for reporting, their timing relative to the
+felt emotion is uncertain (reported as 2 to 3 s), and ratings were given once per clip rather than per moment.
+
+*Reverse inference.* Changes in alpha, theta or beta power are not specific to emotion; attention, motor preparation,
+eye movements and changes in visual content can all produce them [@poldrack2006]. The post hoc analysis shows that
+motor preparation is a plausible alternative explanation for the alpha decrease in marked epochs.
+
+*ICA without ICLabel.* I selected artefact components with documented rules rather than with a trained classifier
+such as ICLabel [@piontonachini2019], and I used FastICA rather than extended Infomax. Some artefact components were
+probably missed and, despite the safeguard against harmful removals, some neural activity may have been removed.
+Muscle activity at high frequencies is particularly difficult to separate [@muthukumaraswamy2013], which mainly
+affects beta power.
+
+*Deviations from the preregistration.* I changed the epoch handling and added ICA safeguards after quality control of
+the first processed participants (Appendix A). The changes were made before any statistical model was fitted, and the
+preregistered rejection rule is reported as a robustness analysis, but they remain decisions taken with knowledge of
+data quality.
+
+# Conclusion
+
+Self marked emotional moments in the DENS dataset did not show a confirmatory spectral signature, and activity during
+these moments was not related to rated valence or arousal. The alpha decrease before clicks is better explained by
+preparation of the click than by the felt emotion. Future naturalistic paradigms with temporal markers should include
+control periods matched for motor output, for example instructed clicks during neutral material or continuous rating
+devices, and users of DENS should be aware that most EEG files in version 1.0.6 are truncated and contain frequent
+single channel transients.
+
+# Data and Code Availability
+
+The data are available from OpenNeuro as dataset ds003751, version 1.0.6 [@dens2023openneuro], under a CC0 licence.
+The code, preregistration, decision log, data audit, results tables and figures are available in the project
+repository, and the full pipeline can be rerun with `Rscript code/run_all.R`. Software versions: R
+`r paste(R.version$major, R.version$minor, sep = ".")`, lme4 `r packageVersion("lme4")`, lmerTest
+`r packageVersion("lmerTest")`, fastICA `r packageVersion("fastICA")`, signal `r packageVersion("signal")` and
+R.matlab `r packageVersion("R.matlab")`, pinned in `env/environment.yml` and `renv.lock`. All numbers in this paper
+are computed from the results files by inline R code.
+
+# Appendix A: Deviations From the Preregistration {.unnumbered}
+
+```{r tab-dev}
+dev <- tibble::tribble(
+  ~ID, ~Change, ~Reason,
+  "D19", "EOG derivations fall back to bad but nonflat periocular channels; missing correlations set to 0 (bug fix)", "Missing derivations caused all 70 components to be removed in some participants",
+  "D20", "Epoch level repair of up to 9 scalp channels above 100 uV; preregistered rule reported as R7", "The preregistered rule discarded nearly all epochs because of sporadic single channel transients",
+  "D21", "Flagged ICA components removed only if removal does not increase the typical amplitude of clean data", "Some flagged components were mixtures whose removal raised beta power up to threefold",
+  "D22", "Spherical spline interpolation regularised (lambda = 0.00001)", "Unregularised weights amplified neighbour noise about twofold",
+  "D23", "Post hoc motor lateralisation analysis, labelled as not preregistered", "Needed to interpret the H1 pattern",
+  "R7", "Additional robustness analysis with the preregistered rejection rule", "Consequence of D20"
+)
+ieee_table(dev, caption = "Deviations From the Preregistration", wide = TRUE,
+           colspec = ">{\\raggedright\\arraybackslash}p{0.05\\textwidth}>{\\raggedright\\arraybackslash}p{0.47\\textwidth}>{\\raggedright\\arraybackslash}p{0.40\\textwidth}")
+```
+
+All other elements, namely the hypotheses, epochs, filters, bad channel criteria, ICA rules, regions, models,
+correction method and the robustness analyses R1 to R6, were run as preregistered.
+
+# Acknowledgment {.unnumbered}
+
+I thank S. Mishra, Md. Asif, U. S. Tiwary and N. Srinivasan for collecting and openly sharing the DENS dataset, and
+OpenNeuro for hosting it.
+
+
+# References {.unnumbered}
+
+::: {#refs}
+:::
